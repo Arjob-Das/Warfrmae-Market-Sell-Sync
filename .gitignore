@@ -179,3 +179,26 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# ==============================================================================
+# Excel Workbooks & Temporary Lock Files
+# ==============================================================================
+*.xlsm
+*.xlsx
+*.xltm
+*.xltx
+~$*.xlsm
+~$*.xlsx
+
+# ==============================================================================
+# Antigravity Agent & Metadata
+# ==============================================================================
+.agents/
+.antigravityignore
+
+# ==============================================================================
+# Local Data, Credentials & Backups
+# ==============================================================================
+config.json
+items_cache.json
+backups/

@@ -8,6 +8,7 @@ dark-mode styling, sidebar credentials, and migration of legacy layouts.
 import os
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border
+from openpyxl.worksheet.datavalidation import DataValidation
 from typing import Optional, Tuple
 
 from .config import (
@@ -18,7 +19,8 @@ from .config import (
     FILL_HEADER_BLUE, FILL_HEADER_GREEN, FILL_SUBHEADER, FILL_TOTAL,
     FILL_TOKEN, FILL_CARD_DARK, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT,
     BORDER_CELL, BORDER_TOTAL, BORDER_TOKEN_BOX, COLUMN_WIDTHS,
-    SHEET_NAME, DEFAULT_EXPORT_DIR_PLACEHOLDER
+    SHEET_NAME, DEFAULT_USER_PLACEHOLDER,
+    load_credentials_from_config
 )
 
 
@@ -41,7 +43,7 @@ def get_credentials_from_excel(excel_file: str) -> Tuple[str, str]:
     username = ""
     jwt_token = ""
     if not os.path.exists(excel_file):
-        return username, jwt_token
+        return load_credentials_from_config()
 
     # Check active Excel first
     app, wb_com = get_open_excel_workbook(excel_file)
@@ -49,40 +51,51 @@ def get_credentials_from_excel(excel_file: str) -> Tuple[str, str]:
         try:
             ws = wb_com.Sheets(1)
             h2_val = str(ws.Range("J2").Value or ws.Range("I2").Value or ws.Range("H2").Value or "").strip()
-            if h2_val and h2_val.lower() not in ("none", "enter your username here"):
+            if h2_val and h2_val.lower() not in ("none", "enter your username here") and not h2_val.startswith("<"):
                 username = h2_val
             h4_val = str(ws.Range("J4").Value or ws.Range("I4").Value or ws.Range("H4").Value or "").strip()
-            if h4_val and h4_val.lower() not in ("none", "paste your jwt token here"):
+            if h4_val and h4_val.lower() not in ("none", "paste your jwt token here") and not h4_val.startswith("<"):
                 if h4_val.lower().startswith("bearer "):
                     h4_val = h4_val[7:].strip()
                 elif h4_val.lower().startswith("jwt "):
                     h4_val = h4_val[4:].strip()
                 if len(h4_val) > 20:
                     jwt_token = h4_val
-            return username, jwt_token
         except Exception:
             pass
 
-    try:
-        wb = openpyxl.load_workbook(excel_file, data_only=True, keep_vba=True)
-        ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
+    if not username or not jwt_token:
+        try:
+            wb = openpyxl.load_workbook(excel_file, data_only=True, keep_vba=True)
+            ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
 
-        h2_val = str(ws["J2"].value or ws["I2"].value or ws["H2"].value or "").strip()
-        if h2_val and h2_val.lower() not in ("none", "enter your username here"):
-            username = h2_val
+            if not username:
+                h2_val = str(ws["J2"].value or ws["I2"].value or ws["H2"].value or "").strip()
+                if h2_val and h2_val.lower() not in ("none", "enter your username here") and not h2_val.startswith("<"):
+                    username = h2_val
 
-        h4_val = str(ws["J4"].value or ws["I4"].value or ws["H4"].value or "").strip()
-        if h4_val and h4_val.lower() not in ("none", "paste your jwt token here"):
-            if h4_val.lower().startswith("bearer "):
-                h4_val = h4_val[7:].strip()
-            elif h4_val.lower().startswith("jwt "):
-                h4_val = h4_val[4:].strip()
-            if len(h4_val) > 20:
-                jwt_token = h4_val
+            if not jwt_token:
+                h4_val = str(ws["J4"].value or ws["I4"].value or ws["H4"].value or "").strip()
+                if h4_val and h4_val.lower() not in ("none", "paste your jwt token here") and not h4_val.startswith("<"):
+                    if h4_val.lower().startswith("bearer "):
+                        h4_val = h4_val[7:].strip()
+                    elif h4_val.lower().startswith("jwt "):
+                        h4_val = h4_val[4:].strip()
+                    if len(h4_val) > 20:
+                        jwt_token = h4_val
 
-        wb.close()
-    except Exception:
-        pass
+            wb.close()
+        except Exception:
+            pass
+
+    # Fallback to local / project config files if values are missing or placeholders
+    if not username or not jwt_token:
+        cfg_user, cfg_tok = load_credentials_from_config()
+        if not username and cfg_user:
+            username = cfg_user
+        if not jwt_token and cfg_tok:
+            jwt_token = cfg_tok
+
     return username, jwt_token
 
 
@@ -154,58 +167,6 @@ def prompt_jwt_token(excel_file: str) -> str:
         save_credentials_to_excel(excel_file, jwt_token=token)
         print(f"[+] Token saved to cell J4 of '{excel_file}'.")
     return token
-
-
-def get_export_dir_from_excel(excel_file: str) -> Optional[str]:
-    """Reads Export Directory from cell J16 (fallback I16, H16)."""
-    if not os.path.exists(excel_file):
-        return None
-
-    app, wb_com = get_open_excel_workbook(excel_file)
-    if wb_com:
-        try:
-            ws = wb_com.Sheets(1)
-            h16_val = str(ws.Range("J16").Value or ws.Range("I16").Value or ws.Range("H16").Value or "").strip()
-            if h16_val and not h16_val.startswith("<") and h16_val.lower() not in ("none", ""):
-                return h16_val
-        except Exception:
-            pass
-
-    try:
-        wb = openpyxl.load_workbook(excel_file, data_only=True, keep_vba=True)
-        ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
-        h16_val = str(ws["J16"].value or ws["I16"].value or ws["H16"].value or "").strip()
-        wb.close()
-        if h16_val and not h16_val.startswith("<") and h16_val.lower() not in ("none", ""):
-            return h16_val
-    except Exception:
-        pass
-    return None
-
-
-def save_export_dir_to_excel(excel_file: str, export_dir: str) -> None:
-    """Writes Export Directory path to cell J16 in the Excel workbook."""
-    if not os.path.exists(excel_file) or not export_dir:
-        return
-
-    app, wb_com = get_open_excel_workbook(excel_file)
-    if wb_com:
-        try:
-            ws = wb_com.Sheets(1)
-            ws.Range("J16").Value = export_dir
-            wb_com.Save()
-            return
-        except Exception:
-            pass
-
-    try:
-        wb = openpyxl.load_workbook(excel_file, keep_vba=True)
-        ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
-        ws["J16"] = export_dir
-        wb.save(excel_file)
-        wb.close()
-    except Exception as e:
-        print(f"[!] Warning: Could not update export directory in Excel: {e}")
 
 
 def safe_merge(ws, cell_range: str) -> None:
@@ -436,8 +397,8 @@ def apply_row_formulas_and_styling(
             cell.number_format = "#,##0"
 
 
-def populate_sidebar_column(ws, username: str = "", jwt_token: str = "", export_dir: str = "") -> None:
-    """Sets up Column J (with Column I gutter) for credentials, actions, and export settings."""
+def populate_sidebar_column(ws, username: str = "", jwt_token: str = "") -> None:
+    """Sets up Column J (with Column I gutter) for credentials, status dropdown, and macro action buttons."""
     max_r = max(ws.max_row or 0, 30)
     for r in range(1, max_r + 5):
         if r != 2:
@@ -475,16 +436,33 @@ def populate_sidebar_column(ws, username: str = "", jwt_token: str = "", export_
     ws["J4"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
     ws["J4"].border = BORDER_TOKEN_BOX
 
-    # J5: Note
-    ws["J5"] = "^ Stored credentials. Read directly by Python. Paste fresh JWT above if expired."
-    ws["J5"].font = Font(name=FONT_NAME, size=8, italic=True, color="94A3B8")
-    ws["J5"].fill = FILL_CANVAS
+    # J5: Status Header (Outbound sync TO Warframe.market)
+    ws["J5"] = "Sync Status TO Warframe.market:"
+    ws["J5"].font = Font(name=FONT_NAME, size=10, bold=True, color="FFFFFF")
+    ws["J5"].fill = FILL_HEADER_BLUE
+    ws["J5"].alignment = ALIGN_LEFT
 
-    # J6: Actions Header
-    ws["J6"] = "One-Click Macro Actions (Click Cell or Button to Run):"
-    ws["J6"].font = Font(name=FONT_NAME, size=10, bold=True, color="FFFFFF")
-    ws["J6"].fill = FILL_HEADER_BLUE
-    ws["J6"].alignment = ALIGN_LEFT
+    # J6: Status Dropdown Cell (Online, Online in Game, Invisible)
+    valid_statuses = ("Online", "Online in Game", "Invisible")
+    existing_j6 = str(ws["J6"].value or "").strip()
+    if existing_j6 and existing_j6 in valid_statuses:
+        status_val = existing_j6
+    else:
+        status_val = "Online in Game"
+
+    ws["J6"] = status_val
+    st_color = "38BDF8" if status_val == "Online in Game" else ("34D399" if status_val == "Online" else "94A3B8")
+    ws["J6"].font = Font(name=FONT_NAME, size=10, bold=True, color=st_color)
+    ws["J6"].fill = FILL_CARD_DARK
+    ws["J6"].alignment = ALIGN_CENTER
+    ws["J6"].border = BORDER_CELL
+
+    # Add Dropdown Data Validation
+    dv = DataValidation(type="list", formula1='"Online,Online in Game,Invisible"', allow_blank=False)
+    dv.error = "Please select 'Online', 'Online in Game', or 'Invisible'."
+    dv.errorTitle = "Invalid Status"
+    ws.add_data_validation(dv)
+    dv.add("J6")
 
     # Action Items (Rows 7, 9, 11, 13)
     actions = [
@@ -502,42 +480,15 @@ def populate_sidebar_column(ws, username: str = "", jwt_token: str = "", export_
         cell.alignment = Alignment(horizontal="left", vertical="center", indent=1, wrap_text=True)
         cell.border = BORDER_CELL
 
-    # J15: Export Directory Header
-    ws["J15"] = "Export Directory (.xlsx sync):"
-    ws["J15"].font = Font(name=FONT_NAME, size=10, bold=True, color="FFFFFF")
-    ws["J15"].fill = FILL_HEADER_DARK
-    ws["J15"].alignment = ALIGN_LEFT
-
-    # J16: Export Directory Cell
-    existing_j16 = str(ws["J16"].value or ws["I16"].value or ws["H16"].value or "").strip()
-    if export_dir:
-        exp_val = export_dir
-    elif existing_j16 and existing_j16.lower() != "none" and not existing_j16.startswith("<"):
-        exp_val = existing_j16
-    else:
-        local_cand = os.path.expanduser(r"~\OneDrive\Documents\Warframe")
-        if os.path.exists(local_cand):
-            exp_val = local_cand
-        else:
-            exp_val = DEFAULT_EXPORT_DIR_PLACEHOLDER
-
-    ws["J16"] = exp_val
-    ws["J16"].font = Font(name=FONT_NAME, size=9, color="F8FAFC")
-    ws["J16"].fill = FILL_CARD_DARK
-    ws["J16"].alignment = ALIGN_LEFT
-    ws["J16"].border = BORDER_CELL
-
-    # J17: Note
-    ws["J17"] = "^ Clean .xlsx copy without macros is automatically exported here on every run."
-    ws["J17"].font = Font(name=FONT_NAME, size=8, italic=True, color="94A3B8")
-    ws["J17"].fill = FILL_CANVAS
-
     # Dark background for Column I gutter and Column J spacer rows
     for r in range(1, max_r + 5):
         i_gutter = ws.cell(row=r, column=9)
         if r != 2 and not i_gutter.value:
             i_gutter.fill = FILL_CANVAS
         j_cell = ws.cell(row=r, column=10)
+        if r > 13:
+            j_cell.value = None
+            j_cell.border = None
         if not j_cell.value:
             j_cell.fill = FILL_CANVAS
 

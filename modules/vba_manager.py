@@ -10,61 +10,9 @@ import openpyxl
 from typing import Optional
 
 from .config import FONT_NAME
-from .sheet_layout import get_open_excel_workbook, get_export_dir_from_excel
+from .sheet_layout import get_open_excel_workbook
 
 VBA_MODULE_CODE = '''Option Explicit
-
-Public Sub ExportNormalXLSX()
-    On Error Resume Next
-    Dim ws As Worksheet
-    Set ws = ThisWorkbook.Sheets(1)
-    Dim exportDir As String
-    exportDir = Trim(CStr(ws.Range("J16").Value))
-    If exportDir = "" Or InStr(exportDir, "<") > 0 Or LCase(exportDir) = "none" Then
-        exportDir = Trim(CStr(ws.Range("I16").Value))
-    End If
-    If exportDir = "" Or InStr(exportDir, "<") > 0 Or LCase(exportDir) = "none" Then
-        exportDir = Trim(CStr(ws.Range("H16").Value))
-    End If
-    If exportDir = "" Or InStr(exportDir, "<") > 0 Or LCase(exportDir) = "none" Then Exit Sub
-    
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(exportDir) Then
-        fso.CreateFolder(exportDir)
-    End If
-    
-    Dim baseName As String
-    baseName = fso.GetBaseName(ThisWorkbook.Name)
-    Dim destPath As String
-    destPath = exportDir
-    If Right(destPath, 1) <> "\\" Then destPath = destPath & "\\"
-    destPath = destPath & baseName & ".xlsx"
-    
-    Dim prevAlerts As Boolean
-    prevAlerts = Application.DisplayAlerts
-    Application.DisplayAlerts = False
-    
-    Dim newWb As Workbook
-    ws.Copy
-    Set newWb = ActiveWorkbook
-    
-    ' Remove macro shapes / buttons from clean exported copy
-    Dim shp As Shape
-    For Each shp In newWb.Sheets(1).Shapes
-        shp.Delete
-    Next shp
-    
-    ' Sanitize sensitive credentials from exported copy
-    newWb.Sheets(1).Range("J4").Value = "Paste your JWT token here"
-    newWb.Sheets(1).Range("I4").Value = "Paste your JWT token here"
-    newWb.Sheets(1).Range("H4").Value = "Paste your JWT token here"
-    
-    newWb.SaveAs Filename:=destPath, FileFormat:=51 ' 51 = xlOpenXMLWorkbook (.xlsx)
-    newWb.Close SaveChanges:=False
-    
-    Application.DisplayAlerts = prevAlerts
-End Sub
 
 Public Sub SortTableByStock()
     On Error Resume Next
@@ -163,7 +111,6 @@ Public Sub SyncFromMarket(Optional ByVal ExtraArgs As String = "")
     On Error Resume Next
     Range("A1").Select
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     
     Dim pyCmd As String
     Dim wsh As Object
@@ -216,7 +163,6 @@ Public Sub PushPricesToMarket(Optional ByVal ExtraArgs As String = "")
     Next rScan
     
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     
     Dim pyCmd As String
     Dim wsh As Object
@@ -312,9 +258,8 @@ Public Sub UpdateAllTimeRevenue()
     
     Call SortTableByStock
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     If totalPlat > 0 Then
-        Application.StatusBar = "All Time Revenue updated (" & Format(totalPlat, "#,##0") & " Plat added). Clean .xlsx copy exported."
+        Application.StatusBar = "All Time Revenue updated (" & Format(totalPlat, "#,##0") & " Plat added)."
     End If
 End Sub
 
@@ -322,7 +267,6 @@ Public Sub RefreshColumnsAndFormulas(Optional ByVal ExtraArgs As String = "")
     On Error Resume Next
     Range("A1").Select
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     
     Dim pyCmd As String
     Dim wsh As Object
@@ -341,11 +285,95 @@ Public Sub RefreshColumnsAndFormulas(Optional ByVal ExtraArgs As String = "")
         Call wsh.Run(pyCmd, 1, False)
     End If
 End Sub
+
+Public Sub StatusDropDownChange()
+    On Error Resume Next
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets(1)
+    Dim dd As Object
+    Set dd = ws.DropDowns("Status_DropDown")
+    If Not dd Is Nothing Then
+        Dim selectedText As String
+        selectedText = dd.List(dd.ListIndex)
+        If selectedText <> "" Then
+            Application.EnableEvents = False
+            ws.Range("J6").Value = selectedText
+            Select Case LCase(Trim(selectedText))
+                Case "online in game"
+                    ws.Range("J6").Font.Color = RGB(56, 189, 248) ' Cyan Accent
+                Case "online"
+                    ws.Range("J6").Font.Color = RGB(52, 211, 153) ' Emerald Green
+                Case "invisible"
+                    ws.Range("J6").Font.Color = RGB(148, 163, 184) ' Slate Gray
+            End Select
+            Application.EnableEvents = True
+            ThisWorkbook.Save
+            Call SetUserStatus(selectedText)
+        End If
+    End If
+End Sub
+
+Public Sub SetUserStatus(ByVal newStatus As String, Optional ByVal ExtraArgs As String = "")
+    On Error Resume Next
+    If Trim(newStatus) = "" Then Exit Sub
+    
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets(1)
+    
+    Select Case LCase(Trim(newStatus))
+        Case "online in game"
+            ws.Range("J6").Font.Color = RGB(56, 189, 248) ' Cyan Accent
+        Case "online"
+            ws.Range("J6").Font.Color = RGB(52, 211, 153) ' Emerald Green
+        Case "invisible"
+            ws.Range("J6").Font.Color = RGB(148, 163, 184) ' Slate Gray
+    End Select
+    
+    Dim pyCmd As String
+    Dim wsh As Object
+    Set wsh = CreateObject("WScript.Shell")
+    
+    Dim pyScript As String
+    pyScript = Chr(34) & ThisWorkbook.Path & "\\warframe_market.py" & Chr(34)
+    Dim xlFile As String
+    xlFile = Chr(34) & ThisWorkbook.FullName & Chr(34)
+    Dim stArg As String
+    stArg = Chr(34) & newStatus & Chr(34)
+    
+    If ExtraArgs <> "" Then
+        pyCmd = "cmd.exe /c cd /d " & Chr(34) & ThisWorkbook.Path & Chr(34) & " && python " & pyScript & " --status " & stArg & " --file " & xlFile & " " & ExtraArgs
+        Call wsh.Run(pyCmd, 1, True)
+    Else
+        pyCmd = "cmd.exe /c cd /d " & Chr(34) & ThisWorkbook.Path & Chr(34) & " && python " & pyScript & " --status " & stArg & " --file " & xlFile
+        Call wsh.Run(pyCmd, 0, False)
+    End If
+End Sub
 '''
 
 SHEET_EVENT_CODE = """Private Sub Worksheet_Change(ByVal Target As Range)
     On Error Resume Next
     If Target.Cells.CountLarge > 20 Then Exit Sub
+    
+    ' Auto-sync warframe.market online presence when J6 status dropdown changes
+    If Target.Column = 10 And Target.Row = 6 Then
+        Dim newSt As String
+        newSt = Trim(CStr(Target.Value))
+        If newSt <> "" Then
+            Dim ddSync As Object
+            Set ddSync = Me.DropDowns("Status_DropDown")
+            If Not ddSync Is Nothing Then
+                Dim iSt As Long
+                For iSt = 1 To ddSync.ListCount
+                    If LCase(Trim(ddSync.List(iSt))) = LCase(newSt) Then
+                        ddSync.ListIndex = iSt
+                        Exit For
+                    End If
+                Next iSt
+            End If
+            Call WarframeMarket.SetUserStatus(newSt)
+        End If
+        Exit Sub
+    End If
     
     Dim cell As Range
     For Each cell In Target
@@ -445,49 +473,6 @@ End Sub
 """
 
 
-def export_clean_xlsx(excel_file: str) -> Optional[str]:
-    """Creates a clean copy of the workbook at the configured export directory, stripped of macros."""
-    export_dir = get_export_dir_from_excel(excel_file)
-    if not export_dir:
-        local_cand = os.path.expanduser(r"~\OneDrive\Documents\Warframe")
-        if os.path.exists(local_cand):
-            export_dir = local_cand
-
-    if not export_dir or export_dir.startswith("<") or export_dir.lower() in ("none", ""):
-        return None
-
-    try:
-        os.makedirs(export_dir, exist_ok=True)
-        base_name = os.path.splitext(os.path.basename(excel_file))[0]
-        dest_file = os.path.join(export_dir, f"{base_name}.xlsx")
-
-        app, wb_com = get_open_excel_workbook(excel_file)
-        if wb_com:
-            try:
-                wb_com.Save()
-            except Exception:
-                pass
-
-        wb = openpyxl.load_workbook(excel_file, data_only=False, keep_vba=False)
-        for ws in wb.worksheets:
-            if hasattr(ws, "_drawing") and ws._drawing:
-                ws._drawing = None
-            try:
-                ws["J4"].value = "Paste your JWT token here"
-                ws["I4"].value = "Paste your JWT token here"
-                ws["H4"].value = "Paste your JWT token here"
-            except Exception:
-                pass
-
-        wb.save(dest_file)
-        wb.close()
-        print(f"[+] Clean .xlsx copy exported to: '{dest_file}'")
-        return dest_file
-    except Exception as e:
-        print(f"[!] Note: Could not export clean .xlsx to '{export_dir}': {e}")
-        return None
-
-
 def inject_vba_and_shapes(input_path: str, output_xlsm: Optional[str] = None) -> bool:
     """Uses win32com to inject VBA module, sheet event handler, and macro shapes."""
     abs_input = os.path.abspath(input_path)
@@ -543,9 +528,9 @@ def inject_vba_and_shapes(input_path: str, output_xlsm: Optional[str] = None) ->
             ("Btn_Refresh", 13, "⚡  Refresh Formulas", "WarframeMarket.RefreshColumnsAndFormulas", (71, 85, 105))
         ]
 
-        # Remove existing buttons if already present
+        # Remove existing buttons and status dropdown shape if already present
         for shape in list(ws.Shapes):
-            if shape.Name.startswith("Btn_"):
+            if shape.Name.startswith("Btn_") or shape.Name == "Status_DropDown":
                 shape.Delete()
 
         for btn_name, row_idx, text, macro_name, (r, g, b) in buttons_info:
@@ -567,6 +552,36 @@ def inject_vba_and_shapes(input_path: str, output_xlsm: Optional[str] = None) ->
             shp.Fill.ForeColor.RGB = r + (g * 256) + (b * 65536)
             shp.Line.Visible = False
             shp.OnAction = macro_name
+
+        # 4. Add Status Dropdown Form Control on J6 (Col 10, Row 6)
+        try:
+            target_j6 = ws.Range("J6")
+            dd = ws.DropDowns().Add(target_j6.Left + 2, target_j6.Top + 2, target_j6.Width - 4, target_j6.Height - 4)
+            dd.Name = "Status_DropDown"
+            dd.AddItem("Online in Game")
+            dd.AddItem("Online")
+            dd.AddItem("Invisible")
+            curr_j6 = str(target_j6.Value or "").strip().lower()
+            if curr_j6 == "online":
+                dd.ListIndex = 2
+            elif curr_j6 == "invisible":
+                dd.ListIndex = 3
+            else:
+                dd.ListIndex = 1
+            dd.OnAction = "WarframeMarket.StatusDropDownChange"
+        except Exception as e:
+            print(f"[!] Note on Status DropDown shape: {e}")
+
+        # 5. Ensure Data Validation on J6 (Status Dropdown)
+        try:
+            val_rng = ws.Range("J6")
+            val_rng.Validation.Delete()
+            # 3 = xlValidateList, 1 = xlValidAlertStop, 1 = xlBetween
+            val_rng.Validation.Add(3, 1, 1, "Online,Online in Game,Invisible")
+            val_rng.Validation.IgnoreBlank = False
+            val_rng.Validation.InCellDropdown = True
+        except Exception:
+            pass
 
         if abs_output == abs_input:
             wb.Save()

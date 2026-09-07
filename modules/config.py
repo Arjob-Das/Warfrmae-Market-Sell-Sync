@@ -15,13 +15,39 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+import json
+import os
+
 # File & API Constants
 CACHE_FILE = "items_cache.json"
 DEFAULT_EXCEL = "Warframe Sell Stats.xlsm"
 SHEET_NAME = "Sheet1"
 API_BASE_URL = "https://api.warframe.market/v2"
 API_CALL_DELAY_SEC = 0.6
-DEFAULT_EXPORT_DIR_PLACEHOLDER = "<PATH_TO_WARFRAME_FOLDER>"
+DEFAULT_USER_PLACEHOLDER = "<YOUR_WARFRAME_MARKET_USERNAME>"
+
+
+def load_credentials_from_config() -> tuple:
+    """
+    Loads username and jwt_token from config.local.json (git-ignored personal override)
+    or config.json. Returns ("", "") if values are placeholders.
+    """
+    for config_path in ("config.local.json", "config.json"):
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    u = str(data.get("username", "")).strip()
+                    tok = str(data.get("jwt_token", "")).strip()
+                    if u.startswith("<") or u.lower() in ("your_warframe_market_username", "none"):
+                        u = ""
+                    if tok.startswith("<") or tok.lower() in ("your_jwt_token_here", "none", "paste your jwt token here"):
+                        tok = ""
+                    if u or tok:
+                        return u, tok
+            except Exception:
+                pass
+    return "", ""
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",

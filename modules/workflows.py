@@ -20,7 +20,6 @@ from .market_updater import (
     read_excel_prices_and_stock, diff_prices_and_stock,
     display_price_diff, push_price_updates
 )
-from .vba_manager import export_clean_xlsx
 
 
 def run_sync_workflow(excel_file: str, username: str, jwt_token: str) -> None:
@@ -81,7 +80,6 @@ def run_push_workflow(excel_file: str, username: str, jwt_token: str, dry_run: b
     print("\n" + "=" * 50)
     print(f"  MARKET UPDATE RESULT: {success} Succeeded, {failed} Failed")
     print("=" * 50)
-    export_clean_xlsx(excel_file)
     time.sleep(1.5)
 
 

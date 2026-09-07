@@ -9,8 +9,10 @@ import os
 import json
 import time
 import base64
+import asyncio
 import requests
-from typing import Dict, List, Tuple
+import websockets
+from typing import Dict, List, Tuple, Optional
 
 from .config import (
     API_BASE_URL, BROWSER_HEADERS, CACHE_FILE
@@ -187,3 +189,107 @@ def fetch_orders(username: str, jwt_token: str, excel_file: str) -> List[dict]:
             print(f"[!] Error with public fetch: {e}")
 
     return []
+
+
+def set_user_status(jwt_token: str, status_text: str) -> bool:
+    """
+    Sets user online status on Warframe.market via WebSocket.
+    Accepted status_text: 'Online', 'Online in Game', 'Invisible' (or 'online', 'ingame', 'invisible').
+    """
+    if not jwt_token or len(jwt_token) < 20:
+        print("[!] Cannot update status: Missing or invalid JWT token.")
+        return False
+
+    st_clean = str(status_text or "").strip().lower()
+    mapping = {
+        "online in game": "ingame",
+        "online in-game": "ingame",
+        "ingame": "ingame",
+        "online": "online",
+        "invisible": "invisible",
+        "offline": "invisible"
+    }
+    target_status = mapping.get(st_clean, "online")
+
+    async def _do_set():
+        uri = "wss://ws.warframe.market/socket"
+        extra_headers = {
+            "Cookie": f"JWT={jwt_token.strip()}",
+            "Origin": "https://warframe.market",
+            "User-Agent": BROWSER_HEADERS.get("User-Agent", "Mozilla/5.0")
+        }
+        async with websockets.connect(uri, subprotocols=["wfm"], additional_headers=extra_headers) as ws:
+            # 1. Sign in
+            await ws.send(json.dumps({
+                "route": "@wfm|cmd/auth/signIn",
+                "payload": {"token": ""}
+            }))
+
+            for _ in range(5):
+                msg = await asyncio.wait_for(ws.recv(), timeout=4)
+                if "@wfm|cmd/auth/signIn:ok" in msg:
+                    break
+
+            # 2. Set status
+            await ws.send(json.dumps({
+                "route": "@wfm|cmd/status/set",
+                "payload": {
+                    "status": target_status,
+                    "duration": None
+                }
+            }))
+
+            for _ in range(8):
+                msg = await asyncio.wait_for(ws.recv(), timeout=4)
+                if "@wfm|cmd/status/set:ok" in msg or "@wfm|event/status/set" in msg:
+                    return True
+            return False
+
+    try:
+        ok = asyncio.run(_do_set())
+        if ok:
+            print(f"[+] Successfully set Warframe.market status to: {status_text}")
+        return ok
+    except Exception as e:
+        print(f"[!] WebSocket status update error: {e}")
+        return False
+
+
+def get_user_status(jwt_token: str) -> Optional[str]:
+    """
+    Connects to Warframe.market WebSocket to detect the user's current online presence status.
+    Returns: 'Online', 'Online in Game', 'Invisible', or None.
+    """
+    if not jwt_token or len(jwt_token) < 20:
+        return None
+
+    async def _do_get():
+        uri = "wss://ws.warframe.market/socket"
+        extra_headers = {
+            "Cookie": f"JWT={jwt_token.strip()}",
+            "Origin": "https://warframe.market",
+            "User-Agent": BROWSER_HEADERS.get("User-Agent", "Mozilla/5.0")
+        }
+        async with websockets.connect(uri, subprotocols=["wfm"], additional_headers=extra_headers) as ws:
+            await ws.send(json.dumps({
+                "route": "@wfm|cmd/auth/signIn",
+                "payload": {"token": ""}
+            }))
+            for _ in range(8):
+                msg = await asyncio.wait_for(ws.recv(), timeout=3)
+                if "@wfm|event/status/set" in msg:
+                    data = json.loads(msg)
+                    st = data.get("payload", {}).get("status")
+                    if st == "ingame":
+                        return "Online in Game"
+                    elif st == "online":
+                        return "Online"
+                    elif st == "invisible":
+                        return "Invisible"
+            return None
+
+    try:
+        return asyncio.run(_do_get())
+    except Exception:
+        return None
+

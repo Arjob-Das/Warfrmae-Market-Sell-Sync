@@ -1,58 +1,6 @@
 Attribute VB_Name = "WarframeMarket"
 Option Explicit
 
-Public Sub ExportNormalXLSX()
-    On Error Resume Next
-    Dim ws As Worksheet
-    Set ws = ThisWorkbook.Sheets(1)
-    Dim exportDir As String
-    exportDir = Trim(CStr(ws.Range("J16").Value))
-    If exportDir = "" Or InStr(exportDir, "<") > 0 Or LCase(exportDir) = "none" Then
-        exportDir = Trim(CStr(ws.Range("I16").Value))
-    End If
-    If exportDir = "" Or InStr(exportDir, "<") > 0 Or LCase(exportDir) = "none" Then
-        exportDir = Trim(CStr(ws.Range("H16").Value))
-    End If
-    If exportDir = "" Or InStr(exportDir, "<") > 0 Or LCase(exportDir) = "none" Then Exit Sub
-    
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(exportDir) Then
-        fso.CreateFolder(exportDir)
-    End If
-    
-    Dim baseName As String
-    baseName = fso.GetBaseName(ThisWorkbook.Name)
-    Dim destPath As String
-    destPath = exportDir
-    If Right(destPath, 1) <> "\" Then destPath = destPath & "\"
-    destPath = destPath & baseName & ".xlsx"
-    
-    Dim prevAlerts As Boolean
-    prevAlerts = Application.DisplayAlerts
-    Application.DisplayAlerts = False
-    
-    Dim newWb As Workbook
-    ws.Copy
-    Set newWb = ActiveWorkbook
-    
-    ' Remove macro shapes / buttons from clean exported copy
-    Dim shp As Shape
-    For Each shp In newWb.Sheets(1).Shapes
-        shp.Delete
-    Next shp
-    
-    ' Sanitize sensitive credentials from exported copy
-    newWb.Sheets(1).Range("J4").Value = "Paste your JWT token here"
-    newWb.Sheets(1).Range("I4").Value = "Paste your JWT token here"
-    newWb.Sheets(1).Range("H4").Value = "Paste your JWT token here"
-    
-    newWb.SaveAs Filename:=destPath, FileFormat:=51 ' 51 = xlOpenXMLWorkbook (.xlsx)
-    newWb.Close SaveChanges:=False
-    
-    Application.DisplayAlerts = prevAlerts
-End Sub
-
 Public Sub SortTableByStock()
     On Error Resume Next
     Dim ws As Worksheet
@@ -150,7 +98,6 @@ Public Sub SyncFromMarket(Optional ByVal ExtraArgs As String = "")
     On Error Resume Next
     Range("A1").Select
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     
     Dim pyCmd As String
     Dim wsh As Object
@@ -203,7 +150,6 @@ Public Sub PushPricesToMarket(Optional ByVal ExtraArgs As String = "")
     Next rScan
     
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     
     Dim pyCmd As String
     Dim wsh As Object
@@ -299,9 +245,8 @@ Public Sub UpdateAllTimeRevenue()
     
     Call SortTableByStock
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     If totalPlat > 0 Then
-        Application.StatusBar = "All Time Revenue updated (" & Format(totalPlat, "#,##0") & " Plat added). Clean .xlsx copy exported."
+        Application.StatusBar = "All Time Revenue updated (" & Format(totalPlat, "#,##0") & " Plat added)."
     End If
 End Sub
 
@@ -309,7 +254,6 @@ Public Sub RefreshColumnsAndFormulas(Optional ByVal ExtraArgs As String = "")
     On Error Resume Next
     Range("A1").Select
     ThisWorkbook.Save
-    Call ExportNormalXLSX
     
     Dim pyCmd As String
     Dim wsh As Object
@@ -326,5 +270,68 @@ Public Sub RefreshColumnsAndFormulas(Optional ByVal ExtraArgs As String = "")
     Else
         pyCmd = "cmd.exe /c cd /d " & Chr(34) & ThisWorkbook.Path & Chr(34) & " && python " & pyScript & " --update-columns --file " & xlFile
         Call wsh.Run(pyCmd, 1, False)
+    End If
+End Sub
+
+Public Sub StatusDropDownChange()
+    On Error Resume Next
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets(1)
+    Dim dd As Object
+    Set dd = ws.DropDowns("Status_DropDown")
+    If Not dd Is Nothing Then
+        Dim selectedText As String
+        selectedText = dd.List(dd.ListIndex)
+        If selectedText <> "" Then
+            Application.EnableEvents = False
+            ws.Range("J6").Value = selectedText
+            Select Case LCase(Trim(selectedText))
+                Case "online in game"
+                    ws.Range("J6").Font.Color = RGB(56, 189, 248) ' Cyan Accent
+                Case "online"
+                    ws.Range("J6").Font.Color = RGB(52, 211, 153) ' Emerald Green
+                Case "invisible"
+                    ws.Range("J6").Font.Color = RGB(148, 163, 184) ' Slate Gray
+            End Select
+            Application.EnableEvents = True
+            ThisWorkbook.Save
+            Call SetUserStatus(selectedText)
+        End If
+    End If
+End Sub
+
+Public Sub SetUserStatus(ByVal newStatus As String, Optional ByVal ExtraArgs As String = "")
+    On Error Resume Next
+    If Trim(newStatus) = "" Then Exit Sub
+    
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets(1)
+    
+    Select Case LCase(Trim(newStatus))
+        Case "online in game"
+            ws.Range("J6").Font.Color = RGB(56, 189, 248) ' Cyan Accent
+        Case "online"
+            ws.Range("J6").Font.Color = RGB(52, 211, 153) ' Emerald Green
+        Case "invisible"
+            ws.Range("J6").Font.Color = RGB(148, 163, 184) ' Slate Gray
+    End Select
+    
+    Dim pyCmd As String
+    Dim wsh As Object
+    Set wsh = CreateObject("WScript.Shell")
+    
+    Dim pyScript As String
+    pyScript = Chr(34) & ThisWorkbook.Path & "\warframe_market.py" & Chr(34)
+    Dim xlFile As String
+    xlFile = Chr(34) & ThisWorkbook.FullName & Chr(34)
+    Dim stArg As String
+    stArg = Chr(34) & newStatus & Chr(34)
+    
+    If ExtraArgs <> "" Then
+        pyCmd = "cmd.exe /c cd /d " & Chr(34) & ThisWorkbook.Path & Chr(34) & " && python " & pyScript & " --status " & stArg & " --file " & xlFile & " " & ExtraArgs
+        Call wsh.Run(pyCmd, 1, True)
+    Else
+        pyCmd = "cmd.exe /c cd /d " & Chr(34) & ThisWorkbook.Path & Chr(34) & " && python " & pyScript & " --status " & stArg & " --file " & xlFile
+        Call wsh.Run(pyCmd, 0, False)
     End If
 End Sub

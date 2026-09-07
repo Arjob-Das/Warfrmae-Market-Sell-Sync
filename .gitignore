@@ -200,6 +200,8 @@ cython_debug/
 # Local Data, Credentials & Backups
 # ==============================================================================
 config.json
+config.local.json
+*.local.json
 items_cache.json
 backups/
 *.lnk

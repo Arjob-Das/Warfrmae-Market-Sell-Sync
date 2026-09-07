@@ -17,7 +17,7 @@ from .sheet_layout import (
     initialize_sheet_structure, apply_row_formulas_and_styling,
     populate_sidebar_column, adjust_column_widths
 )
-from .vba_manager import inject_vba_and_shapes, export_clean_xlsx
+from .vba_manager import inject_vba_and_shapes
 
 
 def sync_market_orders_to_excel(
@@ -261,7 +261,6 @@ def sync_market_orders_to_excel(
         except Exception:
             pass
 
-    export_clean_xlsx(excel_file)
     return updated_cnt, added_cnt
 
 
@@ -437,7 +436,6 @@ def update_columns_and_formulas(excel_file: str) -> int:
         except Exception:
             pass
 
-    export_clean_xlsx(excel_file)
     return len(items)
 
 
@@ -636,5 +634,4 @@ def commit_session_to_all_time(excel_file: str) -> List[Tuple[str, int, int]]:
         except Exception:
             pass
 
-    export_clean_xlsx(excel_file)
     return committed

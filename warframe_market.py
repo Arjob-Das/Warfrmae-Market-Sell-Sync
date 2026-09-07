@@ -10,33 +10,31 @@ Usage:
   python warframe_market.py --push           # Read Excel prices/stock and push changes to warframe.market
   python warframe_market.py --dry-run        # Preview price/stock/visibility changes without pushing
   python warframe_market.py --commit         # Rollover session quantities & revenue to all-time
+  python warframe_market.py --status <name>  # Update live market presence (Online, Online in Game, Invisible)
   python warframe_market.py --update-columns # Refresh formatting, formulas, and VBA macro buttons
-  python warframe_market.py --export-xlsx    # Export clean .xlsx copy without macros
 """
 
+import os
 import sys
 import time
 import argparse
 
-# Re-export all core components for backwards compatibility
+# Re-export core components for backwards compatibility
 from modules.config import (
     CACHE_FILE, DEFAULT_EXCEL, SHEET_NAME, API_BASE_URL,
-    API_CALL_DELAY_SEC, DEFAULT_EXPORT_DIR_PLACEHOLDER,
-    FONT_NAME, FONT_HEADER, FONT_SUBHEADER, FONT_DATA,
-    FONT_ITEM_NAME, FONT_PRICE, FONT_STOCK, FONT_CHECKED,
-    FONT_UNCHECKED, FONT_QTY, FONT_REV, FONT_TOTAL,
-    FONT_TOTAL_LABEL, FONT_MONO, FILL_CANVAS, FILL_ROW_ODD,
-    FILL_ROW_EVEN, FILL_ZEBRA_EVEN, FILL_HEADER_DARK,
-    FILL_HEADER_BLUE, FILL_HEADER_GREEN, FILL_SUBHEADER,
-    FILL_TOTAL, FILL_TOKEN, FILL_CARD_DARK, ALIGN_LEFT,
-    ALIGN_CENTER, ALIGN_RIGHT, BORDER_CELL, BORDER_TOTAL,
-    BORDER_TOKEN_BOX, COLUMN_WIDTHS
+    API_CALL_DELAY_SEC, FONT_NAME, FONT_HEADER, FONT_SUBHEADER,
+    FONT_DATA, FONT_ITEM_NAME, FONT_PRICE, FONT_STOCK, FONT_CHECKED,
+    FONT_UNCHECKED, FONT_QTY, FONT_REV, FONT_TOTAL, FONT_TOTAL_LABEL,
+    FONT_MONO, FILL_CANVAS, FILL_ROW_ODD, FILL_ROW_EVEN, FILL_ZEBRA_EVEN,
+    FILL_HEADER_DARK, FILL_HEADER_BLUE, FILL_HEADER_GREEN, FILL_SUBHEADER,
+    FILL_TOTAL, FILL_TOKEN, FILL_CARD_DARK, ALIGN_LEFT, ALIGN_CENTER,
+    ALIGN_RIGHT, BORDER_CELL, BORDER_TOTAL, BORDER_TOKEN_BOX, COLUMN_WIDTHS,
+    load_credentials_from_config
 )
 
 from modules.sheet_layout import (
     get_open_excel_workbook, get_credentials_from_excel,
     save_credentials_to_excel, prompt_jwt_token,
-    get_export_dir_from_excel, save_export_dir_to_excel,
     safe_merge, migrate_sheet_layout_if_needed,
     initialize_sheet_structure, apply_row_formulas_and_styling,
     populate_sidebar_column, adjust_column_widths
@@ -44,12 +42,12 @@ from modules.sheet_layout import (
 
 from modules.api import (
     get_auth_headers_and_cookies, is_jwt_expired,
-    validate_jwt_token, load_items_catalog, fetch_orders
+    validate_jwt_token, load_items_catalog, fetch_orders,
+    set_user_status
 )
 
 from modules.vba_manager import (
-    VBA_MODULE_CODE, SHEET_EVENT_CODE,
-    inject_vba_and_shapes, export_clean_xlsx
+    VBA_MODULE_CODE, SHEET_EVENT_CODE, inject_vba_and_shapes
 )
 
 from modules.sync_engine import (
@@ -69,9 +67,9 @@ from modules.workflows import (
 )
 
 
-def populate_column_h(ws, username: str = "", jwt_token: str = "", export_dir: str = "") -> None:
+def populate_column_h(ws, username: str = "", jwt_token: str = "") -> None:
     """Backward compatibility alias for populate_sidebar_column."""
-    populate_sidebar_column(ws, username=username, jwt_token=jwt_token, export_dir=export_dir)
+    populate_sidebar_column(ws, username=username, jwt_token=jwt_token)
 
 
 def main():
@@ -82,7 +80,7 @@ def main():
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt on price updates")
     parser.add_argument("--commit", action="store_true", help="Rollover Current Session quantities & revenue to All Time")
     parser.add_argument("--update-columns", action="store_true", help="Refresh formatting, formulas, and VBA macro buttons")
-    parser.add_argument("--export-xlsx", action="store_true", help="Export clean .xlsx copy to configured directory")
+    parser.add_argument("--status", type=str, help="Set Warframe.market online presence (Online, Online in Game, Invisible)")
     parser.add_argument("--user", type=str, help="Override Warframe.market Username")
     parser.add_argument("--token", type=str, help="Override / update JWT Token")
     parser.add_argument("--file", type=str, default=DEFAULT_EXCEL, help="Specify Excel file path")
@@ -90,13 +88,70 @@ def main():
     args = parser.parse_args()
     excel_file = args.file
 
-    # Load credentials directly from Excel cells J2 & J4 (fallback I2/I4, H2/H4)
+    # Credential Resolution:
+    # 1. Command-line args (--user, --token)
+    # 2. Excel cells J2 and J4 (the primary persistent source of truth once created)
+    # 3. Local/default config (config.local.json / config.json)
+    # 4. Interactive first-time prompt if missing
     excel_user, excel_jwt = get_credentials_from_excel(excel_file)
-    username = (args.user or excel_user or "darksoulhunter2001").strip()
+    username = (args.user or excel_user or "").strip()
     jwt_token = (args.token or excel_jwt or "").strip()
 
-    if args.user or args.token:
-        save_credentials_to_excel(excel_file, username=args.user, jwt_token=args.token)
+    # If first-time run and Excel workbook does not exist:
+    if not os.path.exists(excel_file):
+        if not username:
+            print("\n" + "=" * 60)
+            print("  WARFRAME MARKET EXCEL AUTOMATION - FIRST-TIME SETUP")
+            print("=" * 60)
+            while not username:
+                try:
+                    inp = input("[?] Enter your Warframe.market username: ").strip()
+                    if inp:
+                        username = inp
+                except (EOFError, KeyboardInterrupt):
+                    print("\n[-] Setup aborted.")
+                    sys.exit(0)
+
+        if not jwt_token:
+            try:
+                inp_tok = input("[?] Enter your Warframe.market JWT token (or press Enter to set in Excel J4 later): ").strip()
+                if inp_tok:
+                    if inp_tok.lower().startswith("bearer "):
+                        inp_tok = inp_tok[7:].strip()
+                    elif inp_tok.lower().startswith("jwt "):
+                        inp_tok = inp_tok[4:].strip()
+                    if len(inp_tok) > 20:
+                        jwt_token = inp_tok
+            except (EOFError, KeyboardInterrupt):
+                pass
+            print("=" * 60 + "\n")
+    else:
+        # If user explicitly passed --user or --token, save them directly to Excel J2/J4
+        if args.user or args.token:
+            save_credentials_to_excel(excel_file, username=args.user, jwt_token=args.token)
+
+    # Set user status via WebSocket
+    if args.status:
+        if not jwt_token or len(jwt_token) < 20:
+            print("[!] Valid JWT token required to update status. Set in cell J4 or pass --token.")
+            sys.exit(1)
+        ok = set_user_status(jwt_token, args.status)
+        if ok:
+            print(f"[+] Successfully set Warframe.market presence to: {args.status}")
+        else:
+            print(f"[!] Failed to set status to: {args.status}")
+        return
+
+    # Prompt for username if missing on --sync or interactive menu
+    if not username and (args.sync or not any([args.push, args.dry_run, args.commit, args.update_columns])):
+        try:
+            inp = input("\n[?] Enter your Warframe.market username: ").strip()
+            if inp:
+                username = inp
+                if os.path.exists(excel_file):
+                    save_credentials_to_excel(excel_file, username=username)
+        except (EOFError, KeyboardInterrupt):
+            pass
 
     # Command Line Flags Execution
     if args.sync:
@@ -114,14 +169,6 @@ def main():
     elif args.update_columns:
         cnt = update_columns_and_formulas(excel_file)
         print(f"[+] Refreshed {cnt} row(s) with formulas and formatting.")
-        time.sleep(1.2)
-        return
-    elif args.export_xlsx:
-        res = export_clean_xlsx(excel_file)
-        if res:
-            print(f"[+] Clean .xlsx exported: {res}")
-        else:
-            print(f"[!] Export failed or no valid export directory configured.")
         time.sleep(1.2)
         return
 

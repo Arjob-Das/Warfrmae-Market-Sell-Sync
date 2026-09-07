@@ -201,4 +201,8 @@ cython_debug/
 # ==============================================================================
 config.json
 items_cache.json
-backups/
+backups/
+*.lnk
+*token*.txt
+*jwt*.txt
+*.key

@@ -1,5 +1,18 @@
-Attribute VB_Name = "WarframeMarket"
-Option Explicit
+"""
+Warframe Market Sell Sync - VBA Macro & Excel COM Automation
+============================================================
+Injects VBA modules, shape macro buttons, selection event listeners,
+and manages clean .xlsx exports.
+"""
+
+import os
+import openpyxl
+from typing import Optional
+
+from .config import FONT_NAME
+from .sheet_layout import get_open_excel_workbook, get_export_dir_from_excel
+
+VBA_MODULE_CODE = '''Option Explicit
 
 Public Sub ExportNormalXLSX()
     On Error Resume Next
@@ -25,7 +38,7 @@ Public Sub ExportNormalXLSX()
     baseName = fso.GetBaseName(ThisWorkbook.Name)
     Dim destPath As String
     destPath = exportDir
-    If Right(destPath, 1) <> "\" Then destPath = destPath & "\"
+    If Right(destPath, 1) <> "\\" Then destPath = destPath & "\\"
     destPath = destPath & baseName & ".xlsx"
     
     Dim prevAlerts As Boolean
@@ -157,7 +170,7 @@ Public Sub SyncFromMarket(Optional ByVal ExtraArgs As String = "")
     Set wsh = CreateObject("WScript.Shell")
     
     Dim pyScript As String
-    pyScript = Chr(34) & ThisWorkbook.Path & "\warframe_market.py" & Chr(34)
+    pyScript = Chr(34) & ThisWorkbook.Path & "\\warframe_market.py" & Chr(34)
     Dim xlFile As String
     xlFile = Chr(34) & ThisWorkbook.FullName & Chr(34)
     
@@ -210,7 +223,7 @@ Public Sub PushPricesToMarket(Optional ByVal ExtraArgs As String = "")
     Set wsh = CreateObject("WScript.Shell")
     
     Dim pyScript As String
-    pyScript = Chr(34) & ThisWorkbook.Path & "\warframe_market.py" & Chr(34)
+    pyScript = Chr(34) & ThisWorkbook.Path & "\\warframe_market.py" & Chr(34)
     Dim xlFile As String
     xlFile = Chr(34) & ThisWorkbook.FullName & Chr(34)
     
@@ -316,7 +329,7 @@ Public Sub RefreshColumnsAndFormulas(Optional ByVal ExtraArgs As String = "")
     Set wsh = CreateObject("WScript.Shell")
     
     Dim pyScript As String
-    pyScript = Chr(34) & ThisWorkbook.Path & "\warframe_market.py" & Chr(34)
+    pyScript = Chr(34) & ThisWorkbook.Path & "\\warframe_market.py" & Chr(34)
     Dim xlFile As String
     xlFile = Chr(34) & ThisWorkbook.FullName & Chr(34)
     
@@ -328,3 +341,251 @@ Public Sub RefreshColumnsAndFormulas(Optional ByVal ExtraArgs As String = "")
         Call wsh.Run(pyCmd, 1, False)
     End If
 End Sub
+'''
+
+SHEET_EVENT_CODE = """Private Sub Worksheet_Change(ByVal Target As Range)
+    On Error Resume Next
+    If Target.Cells.CountLarge > 20 Then Exit Sub
+    
+    Dim cell As Range
+    For Each cell In Target
+        If (cell.Column = 5 Or cell.Column = 3) And cell.Row >= 3 Then
+            Dim r As Long
+            r = cell.Row
+            If Trim(LCase(Cells(r, 1).Value)) <> "total" And Cells(r, 1).Value <> "" Then
+                Dim fStr As String, minusPos As Long, bStock As Long, sSold As Long, remStk As Long
+                fStr = Trim(CStr(Cells(r, 3).Formula))
+                bStock = 1
+                If Left(fStr, 1) = "=" Then
+                    minusPos = InStr(fStr, "-")
+                    If minusPos > 2 Then
+                        bStock = Val(Mid(fStr, 2, minusPos - 2))
+                    Else
+                        bStock = Val(Cells(r, 3).Value)
+                    End If
+                Else
+                    bStock = Val(Cells(r, 3).Value)
+                End If
+                sSold = Val(Cells(r, 5).Value)
+                remStk = bStock - sSold
+                
+                Application.EnableEvents = False
+                If remStk <= 0 Then
+                    Cells(r, 4).Value = ChrW(&H2610) ' ☐
+                    Cells(r, 4).Font.Color = RGB(100, 116, 139) ' Dim Slate
+                Else
+                    If InStr(CStr(Cells(r, 4).Value), ChrW(&H2610)) > 0 Or InStr(CStr(Cells(r, 4).Value), "☐") > 0 Or Cells(r, 4).Value = False Then
+                        Cells(r, 4).Value = ChrW(&H2611) ' ☑
+                        Cells(r, 4).Font.Color = RGB(52, 211, 153) ' Emerald Green
+                    End If
+                End If
+                Application.EnableEvents = True
+            End If
+        End If
+    Next cell
+End Sub
+
+Private Sub Worksheet_SelectionChange(ByVal Target As Range)
+    On Error Resume Next
+    If Target.Cells.CountLarge > 1 Then Exit Sub
+    
+    ' 1. Interactive Checkbox Toggle in Column D (Visible)
+    If Target.Column = 4 And Target.Row >= 3 Then
+        If Trim(LCase(Cells(Target.Row, 1).Value)) <> "total" And Cells(Target.Row, 1).Value <> "" Then
+            Application.EnableEvents = False
+            If InStr(CStr(Target.Value), ChrW(&H2611)) > 0 Or InStr(CStr(Target.Value), "☑") > 0 Or Target.Value = True Then
+                Target.Value = ChrW(&H2610) ' ☐
+                Target.Font.Color = RGB(100, 116, 139) ' Dim Slate
+            Else
+                Target.Value = ChrW(&H2611) ' ☑
+                Target.Font.Color = RGB(52, 211, 153) ' Emerald Green
+            End If
+            Range("A1").Select
+            Application.EnableEvents = True
+            Exit Sub
+        End If
+    End If
+    
+    ' 2. Trigger actions on cell clicks (with automatic save first)
+    If Target.Row = 2 And (Target.Column = 8 Or Target.Column = 9) Then ' I2: Update All Time Revenue
+        Application.EnableEvents = False
+        Range("A1").Select
+        ThisWorkbook.Save
+        Call WarframeMarket.UpdateAllTimeRevenue
+        Application.EnableEvents = True
+    ElseIf Target.Column = 9 Or Target.Column = 10 Then
+        Select Case Target.Row
+            Case 7
+                Application.EnableEvents = False
+                Range("A1").Select
+                ThisWorkbook.Save
+                Call WarframeMarket.SyncFromMarket
+                Application.EnableEvents = True
+            Case 9
+                Application.EnableEvents = False
+                Range("A1").Select
+                ThisWorkbook.Save
+                Call WarframeMarket.PushPricesToMarket
+                Application.EnableEvents = True
+            Case 11
+                Application.EnableEvents = False
+                Range("A1").Select
+                ThisWorkbook.Save
+                Call WarframeMarket.UpdateAllTimeRevenue
+                Application.EnableEvents = True
+            Case 13
+                Application.EnableEvents = False
+                Range("A1").Select
+                ThisWorkbook.Save
+                Call WarframeMarket.RefreshColumnsAndFormulas
+                Application.EnableEvents = True
+        End Select
+    End If
+End Sub
+"""
+
+
+def export_clean_xlsx(excel_file: str) -> Optional[str]:
+    """Creates a clean copy of the workbook at the configured export directory, stripped of macros."""
+    export_dir = get_export_dir_from_excel(excel_file)
+    if not export_dir:
+        local_cand = os.path.expanduser(r"~\OneDrive\Documents\Warframe")
+        if os.path.exists(local_cand):
+            export_dir = local_cand
+
+    if not export_dir or export_dir.startswith("<") or export_dir.lower() in ("none", ""):
+        return None
+
+    try:
+        os.makedirs(export_dir, exist_ok=True)
+        base_name = os.path.splitext(os.path.basename(excel_file))[0]
+        dest_file = os.path.join(export_dir, f"{base_name}.xlsx")
+
+        app, wb_com = get_open_excel_workbook(excel_file)
+        if wb_com:
+            try:
+                wb_com.Save()
+            except Exception:
+                pass
+
+        wb = openpyxl.load_workbook(excel_file, data_only=False, keep_vba=False)
+        for ws in wb.worksheets:
+            if hasattr(ws, "_drawing") and ws._drawing:
+                ws._drawing = None
+            try:
+                ws["J4"].value = "Paste your JWT token here"
+                ws["I4"].value = "Paste your JWT token here"
+                ws["H4"].value = "Paste your JWT token here"
+            except Exception:
+                pass
+
+        wb.save(dest_file)
+        wb.close()
+        print(f"[+] Clean .xlsx copy exported to: '{dest_file}'")
+        return dest_file
+    except Exception as e:
+        print(f"[!] Note: Could not export clean .xlsx to '{export_dir}': {e}")
+        return None
+
+
+def inject_vba_and_shapes(input_path: str, output_xlsm: Optional[str] = None) -> bool:
+    """Uses win32com to inject VBA module, sheet event handler, and macro shapes."""
+    abs_input = os.path.abspath(input_path)
+    abs_output = os.path.abspath(output_xlsm) if output_xlsm else abs_input
+
+    try:
+        import win32com.client
+    except ImportError:
+        print("[!] pywin32 not installed. Skipping VBA injection.")
+        return False
+
+    excel = None
+    try:
+        excel = win32com.client.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+
+        wb = excel.Workbooks.Open(abs_input)
+        ws = wb.Sheets(1)
+
+        # 1. Inject or update WarframeMarket standard module
+        vb_proj = wb.VBProject
+        mod_found = False
+        for comp in vb_proj.VBComponents:
+            if comp.Name == "WarframeMarket":
+                mod_found = True
+                comp.CodeModule.DeleteLines(1, comp.CodeModule.CountOfLines)
+                comp.CodeModule.AddFromString(VBA_MODULE_CODE)
+                break
+        if not mod_found:
+            new_mod = vb_proj.VBComponents.Add(1)  # vbext_ct_StdModule
+            new_mod.Name = "WarframeMarket"
+            new_mod.CodeModule.AddFromString(VBA_MODULE_CODE)
+
+        # 2. Inject Worksheet_SelectionChange event into Sheet1
+        sheet_comp = None
+        sheet_code_name = ws.CodeName or ws.Name
+        for comp in vb_proj.VBComponents:
+            if comp.Type == 100 and (comp.Name == sheet_code_name or comp.Name == ws.Name):
+                sheet_comp = comp
+                break
+        if sheet_comp:
+            code_mod = sheet_comp.CodeModule
+            if code_mod.CountOfLines > 0:
+                code_mod.DeleteLines(1, code_mod.CountOfLines)
+            code_mod.AddFromString(SHEET_EVENT_CODE)
+
+        # 3. Add or update OnAction Shape Buttons in Column J (Col 10)
+        buttons_info = [
+            ("Btn_Sync", 7, "▶  Sync from Market", "WarframeMarket.SyncFromMarket", (2, 132, 199)),
+            ("Btn_Push", 9, "⬆  Push Prices & Stock", "WarframeMarket.PushPricesToMarket", (5, 150, 105)),
+            ("Btn_End", 11, "🔄  Update All Time Revenue", "WarframeMarket.UpdateAllTimeRevenue", (217, 119, 6)),
+            ("Btn_Refresh", 13, "⚡  Refresh Formulas", "WarframeMarket.RefreshColumnsAndFormulas", (71, 85, 105))
+        ]
+
+        # Remove existing buttons if already present
+        for shape in list(ws.Shapes):
+            if shape.Name.startswith("Btn_"):
+                shape.Delete()
+
+        for btn_name, row_idx, text, macro_name, (r, g, b) in buttons_info:
+            target_cell = ws.Cells(row_idx, 10)
+            left = target_cell.Left + 4
+            top = target_cell.Top + 2
+            width = min(260, target_cell.Width - 8)
+            height = target_cell.Height - 4
+
+            shp = ws.Shapes.AddShape(5, left, top, width, height)  # 5 = msoShapeRoundedRectangle
+            shp.Name = btn_name
+            shp.TextFrame2.TextRange.Characters.Text = text
+            shp.TextFrame2.TextRange.Font.Name = FONT_NAME
+            shp.TextFrame2.TextRange.Font.Size = 9.5
+            shp.TextFrame2.TextRange.Font.Bold = True
+            shp.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = 16777215  # White
+            shp.TextFrame2.VerticalAnchor = 3  # msoAnchorMiddle
+            shp.TextFrame2.TextRange.ParagraphFormat.Alignment = 2  # msoAlignCenter
+            shp.Fill.ForeColor.RGB = r + (g * 256) + (b * 65536)
+            shp.Line.Visible = False
+            shp.OnAction = macro_name
+
+        if abs_output == abs_input:
+            wb.Save()
+        else:
+            wb.SaveAs(abs_output, 52)  # 52 = xlOpenXMLWorkbookMacroEnabled
+        wb.Close(False)
+        wb = None
+        return True
+    except Exception as e:
+        print(f"[!] Note on VBA injection: {e}")
+        return False
+    finally:
+        try:
+            if 'wb' in locals() and wb:
+                wb.Close(False)
+        except Exception:
+            pass
+        try:
+            if excel:
+                excel.Quit()
+        except Exception:
+            pass
